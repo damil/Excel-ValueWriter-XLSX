@@ -185,7 +185,7 @@ sub add_table {
   my $table_id = $self->n_tables;
 
   # build column headers from first data row
-  unshift @col_names, undef;
+  unshift @col_names, undef; # so that the first index is at 1, not 0
   my @columns = map {qq{<tableColumn id="$_" name="$col_names[$_]"/>}} 1 .. $#col_names;
 
   # Excel range of this table
@@ -316,7 +316,6 @@ sub content_types {
 }
 
 
-
 sub core {
   my ($self) = @_;
 
@@ -332,8 +331,6 @@ sub core {
 
   return join "", @xml;
 }
-
-
 
 sub app {
   my ($self) = @_;
