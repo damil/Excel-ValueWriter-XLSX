@@ -103,7 +103,8 @@ sub add_sheet {
   # start building XML for the sheet
   my @xml = (
     q{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
-    q{<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">},
+    q{<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"},
+              q{ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">},
     q{<sheetData>},
     );
 
@@ -201,7 +202,8 @@ sub add_table {
   # assemble XML for the table
   my @xml = (
     qq{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
-    qq{<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="$table_id" displayName="$table_name" ref="$ref" totalsRowShown="0">},
+    qq{<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"}.
+         qq{ id="$table_id" displayName="$table_name" ref="$ref" totalsRowShown="0">},
     qq{<autoFilter ref="A1:D4"/>},
     qq{<tableColumns count="$#col_names">},
     @columns,
@@ -277,7 +279,8 @@ sub workbook {
   # opening XML
   my @xml = (
     qq{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
-    qq{<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">},
+    qq{<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"},
+             qq{ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">},
     qq{<sheets>},
     );
 
@@ -298,20 +301,22 @@ sub workbook {
 sub content_types {
   my ($self) = @_;
 
+  my $spreadsheetml = "application/vnd.openxmlformats-officedocument.spreadsheetml";
+
   my @sheets_xml
-    = map {qq{<Override PartName="/xl/worksheets/sheet$_.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>}} 1 .. $self->n_sheets;
+    = map {qq{<Override PartName="/xl/worksheets/sheet$_.xml" ContentType="$spreadsheetml.worksheet+xml"/>}} 1 .. $self->n_sheets;
 
   my @tables_xml
-    = map {qq{  <Override PartName="/xl/tables/table$_.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>}} 1 .. $self->n_tables;
+    = map {qq{  <Override PartName="/xl/tables/table$_.xml" ContentType="$spreadsheetml.table+xml"/>}} 1 .. $self->n_tables;
 
   my @xml = (
     qq{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
     qq{<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">},
     qq{<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>},
     qq{<Default Extension="xml" ContentType="application/xml"/>},
-    qq{<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>},
-    qq{<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>},
-    qq{<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>},
+    qq{<Override PartName="/xl/workbook.xml" ContentType="$spreadsheetml.sheet.main+xml"/>},
+    qq{<Override PartName="/xl/styles.xml" ContentType="$spreadsheetml.styles+xml"/>},
+    qq{<Override PartName="/xl/sharedStrings.xml" ContentType="$spreadsheetml.sharedStrings+xml"/>},
     qq{<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>},
     qq{<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>},
     @sheets_xml,
@@ -330,7 +335,11 @@ sub core {
 
   my @xml = (
     qq{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
-    qq{<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">},
+    qq{<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" },
+                      qq{ xmlns:dc="http://purl.org/dc/elements/1.1/"},
+                      qq{ xmlns:dcterms="http://purl.org/dc/terms/"},
+                      qq{ xmlns:dcmitype="http://purl.org/dc/dcmitype/"},
+                      qq{ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">},
     qq{<dcterms:created xsi:type="dcterms:W3CDTF">$now</dcterms:created>},
     qq{<dcterms:modified xsi:type="dcterms:W3CDTF">$now</dcterms:modified>},
     qq{</cp:coreProperties>},
@@ -344,7 +353,8 @@ sub app {
 
   my @xml = (
     qq{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
-    qq{<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">},
+    qq{<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"},
+               qq{ xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">},
     qq{<Application>Microsoft Excel</Application>},
     qq{</Properties>},
    );
@@ -365,7 +375,8 @@ sub shared_strings {
   # assemble XML
   my @xml = (
     qq{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
-    qq{<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="$self->{n_strings_in_workbook}" uniqueCount="$self->{last_string_id}">},
+    qq{<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"},
+         qq{ count="$self->{n_strings_in_workbook}" uniqueCount="$self->{last_string_id}">},
     @si_nodes,
     qq{</sst>},
    );
