@@ -12,7 +12,7 @@ use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
 use Encode                qw/encode_utf8/;
 
-my $VERSION = '0.1';
+my $VERSION = '0.2';
 
 #======================================================================
 # GLOBALS
@@ -604,7 +604,6 @@ Not done yet
 
 =head1 TO DO
 
-  - tests (use LibXML for checking schema validity)
   - options for workbook properties : author, etc.
   - support for 1904 date schema
 
@@ -619,4 +618,3 @@ Copyright 2022 by Laurent Dami.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.
-
