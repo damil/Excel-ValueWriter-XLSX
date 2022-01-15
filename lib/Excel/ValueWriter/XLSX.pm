@@ -70,7 +70,11 @@ sub new {
 
 
 sub add_sheet {
-  my ($self, $sheet_name, $table_name, $code_or_array) = @_;
+  # 3rd parameter ($headers) may be omitted -- so we insert an undef if necessary
+  splice @_, 3, 0, undef if @_ < 5;
+
+  # now we can parse the parameters
+  my ($self, $sheet_name, $table_name, $headers, $code_or_array) = @_;
 
   # check if the given sheet name is valid
   $sheet_name =~ $SHEET_NAME
@@ -82,9 +86,13 @@ sub add_sheet {
   my $date_regex = $self->{date_regex};
 
   # iterator for generating rows; either received as argument or built as a closure upon an array
-  my $next_row = ref $code_or_array eq 'CODE'  ? $code_or_array
-               : ref $code_or_array ne 'ARRAY' ? croak "add_sheet() : invalid row generator"
-               : do {my $i = 0; sub { $i < @$code_or_array ? $code_or_array->[$i++] : undef}};
+  my $next_row 
+    = ref $code_or_array eq 'CODE'  ? $code_or_array
+    : ref $code_or_array ne 'ARRAY' ? croak 'add_sheet() : missing or invalid $rows argument'
+    : do {my $i = 0; sub { $i < @$code_or_array ? $code_or_array->[$i++] : undef}};
+
+  # if $headers were not given explicitly, the first row will do
+  $headers //= $next_row->();
 
   # array of column references in A1 Excel notation
   my @col_letters = ('A'); # this array will be expanded on demand in the loop below
@@ -101,13 +109,12 @@ sub add_sheet {
 
   # loop over rows and columns
   my $row_num = 0;
-  my @headers;
+  # my $row     = $headers;
  ROW:
-  while (my $row = $next_row->()) {
+  for (my $row = $headers; $row; $row = $next_row->()) {
     $row_num++;
     my $last_col = @$row or next ROW;
     my @cells;
-    @headers = @$row if not @headers;
 
   COLUMN:
     foreach my $col (0 .. $last_col-1) {
@@ -140,8 +147,8 @@ sub add_sheet {
 
   # if required, add the table corresponding to this sheet into the zip archive, and refer to it in XML
   my @table_rels;
-  if ($table_name) {
-    my $table_id = $self->add_table($table_name, $col_letters[-1], $row_num, @headers);
+  if ($table_name && $row_num) {
+    my $table_id = $self->add_table($table_name, $col_letters[-1], $row_num, @$headers);
     push @table_rels, $table_id;
     push @xml, q{<tableParts count="1"><tablePart r:id="rId1"/></tableParts>};
   }
