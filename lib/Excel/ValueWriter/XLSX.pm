@@ -110,7 +110,6 @@ sub add_sheet {
 
   # loop over rows and columns
   my $row_num = 0;
-  # my $row     = $headers;
  ROW:
   for (my $row = $headers; $row; $row = $next_row->()) {
     $row_num++;
@@ -488,8 +487,8 @@ Excel::ValueWriter::XLSX - generating data-only Excel workbooks in XLSX format, 
 =head1 SYNOPSIS
 
   my $writer = Excel::ValueWriter::XLSX->new;
-  $writer->add_sheet($sheet_name1, $table_name1, [[qw/a b/], [1, 2], [3, 4]]);
-  $writer->add_sheet($sheet_name2, $table_name2, $row_generator);
+  $writer->add_sheet($sheet_name1, $table_name1, [qw/a b/], [[1, 2], [3, 4]]);
+  $writer->add_sheet($sheet_name2, $table_name2, \@headers, $row_generator);
   $writer->save_as($filename);
 
 
@@ -521,7 +520,7 @@ Constructor for a new writer object. Currently the only option is :
 
 =over
 
-* date_regex
+=item date_regex
 
 A compiled regular expression for detecting data cells that contain dates.
 The default implementation recognizes dates in C<dd.mm.yyyy>, C<yyyy-mm-dd>
@@ -533,7 +532,7 @@ in C<< $+{d} >>, C<< $+{m} >> and C<< $+{y} >>.
 
 =head2 add_sheet
 
-  $writer->add_sheet($sheet_name, $table_name, $rows);
+  $writer->add_sheet($sheet_name, $table_name, [$headers,] $rows);
 
 Adds a new worksheet into the workbook.
 
@@ -541,14 +540,23 @@ Adds a new worksheet into the workbook.
 
 =item *
 
-The C<$sheet_name> must be unique and between 1 and 31 characters long.
+The C<$sheet_name> is mandatory; it must be unique and between 1 and 31 characters long.
 
 =item *
 
 The C<$table_name> is optional; if not C<undef>, the sheet contents
 will be registered as an Excel table. The table name must be unique,
 of minimum 3 characters, without spaces or special characters.
-Values in the first row will become the headers of the table.
+
+=item *
+
+The C<$headers> argument is optional; it may be C<undef> or may even be absent.
+If present, it should contain an arrayref of scalar values, that will
+be used as column names for the table associated with that worksheet.
+Column names should be unique (otherwise Excel will automatically add
+a discriminating number). If C<$headers> are not present, the first
+row in C<$rows> will be treated as headers.
+
 
 =item *
 
@@ -556,7 +564,13 @@ The C<$rows> argument may be either a reference to a 2-dimensional array of valu
 or a reference to a callback function that will return a new row at each call, in the
 form of a 1-dimensional array reference. An empty return from the callback
 function signals the end of data (but intermediate empty rows may be returned
-as C<< [] >>).
+as C<< [] >>). Callback functions should typically be I<closures> over a lexical
+variable that remembers when the last row has been met. Here is an example of a
+callback function used to feed a sheet with 500 lines of 300 columns of random numbers:
+
+  my @headers_for_rand = map {"h$_"} 1 .. 300;
+  my $random_rows = do {my $count = 500; sub {$count-- > 0 ? [map {rand()} 1 .. 300] : undef}};
+  $writer->add_sheet(RAND_SHEET => rand => \@headers_for_rand, $random_rows);
 
 =back
 
@@ -592,7 +606,6 @@ Not done yet
   - tests (use LibXML for checking schema validity)
   - options for workbook properties : author, etc.
   - support for 1904 date schema
-  - easier API for headers when using a row callback function
 
 
 =head1 AUTHOR
