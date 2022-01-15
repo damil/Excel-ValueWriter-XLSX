@@ -467,7 +467,7 @@ sub n_days {
   my ($y, $m, $d) = @_;
 
   # convert the given date into a number of days since 1st January 1900
-  my $n_days = Delta_Days(1900, 1, 1, $+{y}, $+{m}, $+{d}) + 1;
+  my $n_days = Delta_Days(1900, 1, 1, $y, $m, $d) + 1;
   my $is_after_february_1900 = $n_days > 59;
   $n_days += 1 if $is_after_february_1900; # because Excel wrongly treats 1900 as a leap year
 
