@@ -10,6 +10,7 @@ use Params::Validate      qw/validate_with SCALARREF UNDEF/;
 use POSIX                 qw/strftime/;
 use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
+use Encode                qw/encode_utf8/;
 
 my $VERSION = '0.1';
 
@@ -212,7 +213,7 @@ sub add_table {
    );
 
   # insert into the zip archive
-  $self->{zip}->addString(join("", @xml), "xl/tables/table$table_id.xml");
+  $self->{zip}->addString(encode_utf8(join "", @xml), "xl/tables/table$table_id.xml");
 
   return $table_id;
 }
@@ -293,7 +294,7 @@ sub workbook {
   # closing XML
   push @xml, q{</sheets>}, q{</workbook>};
 
-  return join "", @xml;
+  return encode_utf8(join "", @xml);
 }
 
 
@@ -380,7 +381,7 @@ sub shared_strings {
     qq{</sst>},
    );
 
-  return join "", @xml;
+  return encode_utf8(join "", @xml);
 }
 
 

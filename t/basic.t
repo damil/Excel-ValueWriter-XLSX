@@ -1,3 +1,4 @@
+use utf8;
 use strict;
 use warnings;
 use Test::More;
@@ -10,18 +11,18 @@ my $filename = 'foo.xlsx';
 my $writer = Excel::ValueWriter::XLSX->new;
 
 # 1st sheet, plain values and dates
-$writer->add_sheet(s1 =>      tabt1 => [[qw/foo bar barbar gig/],
-                                        [1, 2],
-                                        [3, undef, 0, 4],
-                                        [qw(01.01.2022 19.12.1999 2022-3-4 12/30/1998)],
-                                        [qw(01.01.1900 28.02.1900 01.03.1900)],
-                                        [qw/bar foo/]]);
+$writer->add_sheet(s1 => à_table => [[qw/foo bar barbar gig/],
+                                     [1, 2],
+                                     [3, undef, 0, 4],
+                                     [qw(01.01.2022 19.12.1999 2022-3-4 12/30/1998)],
+                                     [qw(01.01.1900 28.02.1900 01.03.1900)],
+                                     [qw/bar foo/]]);
 
 # sheet without table
-$writer->add_sheet(no_table => (undef) => [[qw/aa bb cc dd/],
-                                           [45, 56],
-                                           [qw/il était une bergère/],
-                                           [99, 33, 33]]);
+$writer->add_sheet(table_oubliée => (undef) => [[qw/aa bb cc dd/],
+                                                [45, 56],
+                                                [qw/il était une bergère/],
+                                                [99, 33, 33]]);
 
 # sheet with a large number of random values
 my @headers_for_rand = map {"h$_"} 1 .. 300;
