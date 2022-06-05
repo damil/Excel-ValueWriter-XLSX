@@ -1,18 +1,25 @@
-use 5.014;
 package Excel::ValueWriter::XLSX;
+use 5.024;
 use strict;
 use warnings;
 use utf8;
 use Archive::Zip          qw/AZ_OK/;
 use Scalar::Util          qw/looks_like_number/;
-use List::Util            qw/none/;
-use Params::Validate      qw/validate_with SCALARREF UNDEF/;
+use List::Util            qw/none max/;
+use Params::Validate      qw/validate_with SCALAR SCALARREF ARRAYREF UNDEF/;
 use POSIX                 qw/strftime/;
 use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
 use Encode                qw/encode_utf8/;
 
 my $VERSION = '0.2';
+
+
+# TODO
+#   - workbook.xml, only 1 sheet
+#   - tables out of order
+
+
 
 #======================================================================
 # GLOBALS
@@ -34,6 +41,10 @@ my %params_spec = (
                         | (?<y>\d\d\d\d) -  (?<m>\d\d?) -  (?<d>\d\d?)     # yyyy-mm-dd
                         | (?<m>\d\d?)    /  (?<d>\d\d?) /  (?<y>\d\d\d\d)) # mm/dd/yyyy
                       $]x},
+
+  template         => {type => SCALAR,   optional => 1},
+  sheets_to_remove => {type => ARRAYREF, optional => 1},
+
  );
 
 
@@ -51,17 +62,20 @@ sub new {
                            );
 
   # initial values for internal data structures
-  $self->{sheets}                = []; # array of sheet names
-  $self->{tables}                = []; # array of table names
-  $self->{shared_string}         = {}; # ($string => $string_index)
+  $self->{sheets}                = {}; # ($sheet_name => $sheet_index)
+  $self->{tables}                = {}; # ($table_name => $table_index)
+  $self->{shared_strings}        = {}; # ($string => $string_index)
   $self->{n_strings_in_workbook} = 0;  # total nb of strings (including duplicates)
   $self->{last_string_id}        = 0;  # index for the next shared string
 
   # immediately open a Zip archive
   $self->{zip} = Archive::Zip->new;
 
-  # return the constructed object
   bless $self, $class;
+
+  $self->load_template if $self->{template};
+
+  return $self;
 }
 
 
@@ -80,7 +94,7 @@ sub add_sheet {
   # check if the given sheet name is valid
   $sheet_name =~ $SHEET_NAME
     or croak "'$sheet_name' is not a valid sheet name";
-  none {$sheet_name eq $_} @{$self->{sheets}}
+  ! $self->{sheets}{$sheet_name}
     or croak "this workbook already has a sheet named '$sheet_name'";
 
   # local copy for convenience
@@ -99,7 +113,8 @@ sub add_sheet {
   my @col_letters = ('A'); # this array will be expanded on demand in the loop below
 
   # register the sheet name 
-  push @{$self->{sheets}}, $sheet_name;
+  my $sheet_id = $self->max_sheet_id + 1;
+  $self->{sheets}{$sheet_name} = $sheet_id;
 
   # start building XML for the sheet
   my @xml = (
@@ -158,7 +173,6 @@ sub add_sheet {
   push @xml, q{</worksheet>};
 
   # insert the sheet and its rels into the zip archive
-  my $sheet_id   = $self->n_sheets;
   my $sheet_file = "sheet$sheet_id.xml";
   $self->{zip}->addString(join("", @xml),                     "xl/worksheets/$sheet_file");
   $self->{zip}->addString($self->worksheet_rels(@table_rels), "xl/worksheets/_rels/$sheet_file.rels");
@@ -166,6 +180,9 @@ sub add_sheet {
   return $sheet_id;
 }
 
+
+sub max_sheet_id {max 0, values shift->{sheets}->%*}
+sub max_table_id {max 0, values shift->{tables}->%*}
 
 sub add_shared_string {
   my ($self, $string) = @_;
@@ -185,12 +202,13 @@ sub add_table {
   # check if the given table name is valid
   $table_name =~ $TABLE_NAME
     or croak "'$table_name' is not a valid table name";
-  none {$table_name eq $_} @{$self->{tables}}
+  ! $self->{tables}{$table_name}
     or croak "this workbook already has a table named '$table_name'";
 
   # register this table
-  push @{$self->{tables}}, $table_name;
-  my $table_id = $self->n_tables;
+  my $table_id = $self->max_table_id + 1;
+  $self->{tables}{$table_name} = $table_id;
+
 
   # build column headers from first data row
   unshift @col_names, undef; # so that the first index is at 1, not 0
@@ -265,7 +283,7 @@ sub workbook_rels {
   my ($self) = @_;
 
   my @rels = map {("officeDocument/2006/relationships/worksheet"     => "worksheets/sheet$_.xml")}
-                 1 .. $self->n_sheets;
+                 sort {$a <=> $b} values $self->{sheets}->%*;
   push @rels,      "officeDocument/2006/relationships/sharedStrings" => "sharedStrings.xml",
                    "officeDocument/2006/relationships/styles"        => "styles.xml";
 
@@ -285,10 +303,9 @@ sub workbook {
     );
 
   # references to the worksheets
-  my $sheet_id = 1;
-  foreach my $sheet_name (@{$self->{sheets}}) {
+  foreach my $pair (sorted_pairs($self->{sheets})) {
+    my ($sheet_name, $sheet_id) = @$pair;
     push @xml, qq{<sheet name="$sheet_name" sheetId="$sheet_id" r:id="rId$sheet_id"/>};
-    $sheet_id++;
   }
 
   # closing XML
@@ -298,16 +315,19 @@ sub workbook {
 }
 
 
+
+
+
 sub content_types {
   my ($self) = @_;
 
   my $spreadsheetml = "application/vnd.openxmlformats-officedocument.spreadsheetml";
 
   my @sheets_xml
-    = map {qq{<Override PartName="/xl/worksheets/sheet$_.xml" ContentType="$spreadsheetml.worksheet+xml"/>}} 1 .. $self->n_sheets;
+    = map {qq{<Override PartName="/xl/worksheets/sheet$_.xml" ContentType="$spreadsheetml.worksheet+xml"/>}} sort {$a <=> $b} values $self->{sheets}->%*;
 
   my @tables_xml
-    = map {qq{  <Override PartName="/xl/tables/table$_.xml" ContentType="$spreadsheetml.table+xml"/>}} 1 .. $self->n_tables;
+    = map {qq{  <Override PartName="/xl/tables/table$_.xml" ContentType="$spreadsheetml.table+xml"/>}} sort {$a <=> $b} values $self->{tables}->%*;
 
   my @xml = (
     qq{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
@@ -370,7 +390,9 @@ sub shared_strings {
 
   # array of XML nodes for each shared string
   my @si_nodes;
-  $si_nodes[$self->{shared_strings}{$_}] = si_node($_) foreach keys %{$self->{shared_strings}};
+  while (my ($string, $index) = each $self->{shared_strings}->%*) {
+    $si_nodes[$index] = si_node($string);
+  }
 
   # assemble XML
   my @xml = (
@@ -434,15 +456,6 @@ sub relationships {
 }
 
 
-sub n_sheets {
-  my ($self) = @_;
-  return scalar @{$self->{sheets}};
-}
-
-sub n_tables {
-  my ($self) = @_;
-  return scalar @{$self->{tables}};
-}
 
 
 #======================================================================
@@ -475,8 +488,218 @@ sub n_days {
 }
 
 
-1;
+sub sorted_pairs {
+  my ($hash) = @_;
 
+  my @k = sort {$hash->{$a} <=> $hash->{$b}} keys %$hash;
+  return map {[$_ => $hash->{$_}]} @k;
+}
+
+
+
+
+
+#======================================================================
+# LOAD AN EXISTING EXCEL FILE AS A TEMPLATE
+#======================================================================
+
+sub load_template {
+  my ($self) = @_;
+
+  my $read_result = $self->{zip}->read($self->{template});
+  $read_result == AZ_OK  or die "cannot unzip $self->{template}";
+
+  # TODO : lazy attribute
+  $self->{workbook_data} = $self->_workbook_data;
+
+  $self->{remove_sheets} //= [];
+
+  $self->prune_strings_and_sheets;
+
+
+  $self->remove_sheet($_) foreach $self->{sheets_to_remove}->@*;
+
+
+  $self->{zip}->removeMember($_) for ("[Content_Types].xml",
+                                      "docProps/core.xml",
+                                      "docProps/app.xml",
+                                      "xl/workbook.xml",
+                                      "_rels/.rels",
+                                      "xl/_rels/workbook.xml.rels",
+                                      "xl/sharedStrings.xml",
+                                      "xl/styles.xml",
+                                      'xl/sharedStrings.xml',
+                                     );
+}
+
+
+sub remove_sheet {
+  my ($self, $sheet_name) = @_;
+
+  my $sheet_zip_member = $self->_zip_member_name_for_sheet($sheet_name);
+  my $rels_zip_member  = $sheet_zip_member =~ s[(sheet\d+\.xml)$][_rels/$1.rels]r;
+
+  my $sheet_xml  = $self->_zip_member_contents($sheet_zip_member);
+  my $rels_xml   = $self->_zip_member_contents($rels_zip_member);
+
+
+
+  my @tables = $rels_xml =~ m[relationships/table" Target="../(tables/table\d+.xml)"]g;
+  $self->{zip}->removeMember("xl/$_") foreach @tables;
+
+
+  $self->{zip}->removeMember($_) for $sheet_zip_member, $rels_zip_member;
+}
+
+
+
+
+
+sub prune_strings_and_sheets {
+  my ($self) = @_;
+
+  my $rx_string_in_cell = qr[<c([^>]+?)t="s"><v>(\d+)</v></c>];
+
+  my $all_sheets     = $self->sheets;
+  my %to_remove      = map {($_ => 1)} $self->{sheets_to_remove}->@*;
+  my @sheets_to_keep = grep {!$to_remove{$_}} keys %$all_sheets;
+
+
+  # string ids used in sheets that will not be removed
+  my @keep_string;
+  foreach my $sheet_name (@sheets_to_keep) {
+    my $zip_member = $self->_zip_member_name_for_sheet($sheet_name);
+    my $sheet_xml  = $self->_zip_member_contents($zip_member);
+    while ($sheet_xml =~ m/$rx_string_in_cell/g) {
+      my $string_id = $2;
+      $keep_string[$string_id]++;
+      $self->{n_strings_in_workbook}++;
+    }
+
+    # feed internal structure for sheets 
+    push $self->{sheets}->@*, $sheet_name;
+
+    # register names of tables that will not be removed
+    my @table_ids = $sheet_xml =~ m[relationships/table" Target="../tables/table(\d+).xml"]g;
+    foreach my $table_id (@table_ids) {
+      my $table_xml = $self->_zip_member_contents("xl/tables/table$table_id.xml");
+      my ($table_name) = $table_xml =~ m[id="\d+" displayName="(\w+)"];
+      $self->{tables}{$table_name} = $table_id;
+    }
+  }
+
+  # just keep the necessary strings and recompute their indices
+  my $next_string_index = 0;
+  my @remap_index;
+  $keep_string[$_] and @remap_index[$_] = $next_string_index++ for 0 .. $#keep_string;
+
+
+  # rewrite the sheet contents with the new indices
+  foreach my $sheet_name (@sheets_to_keep) {
+    my $zip_member = $self->_zip_member_name_for_sheet($sheet_name);
+    my $sheet_xml  = $self->_zip_member_contents($zip_member);
+    $sheet_xml =~ s[$rx_string_in_cell]
+                   [<c$1t="s"><v>$remap_index[$2]</v></c>]g;
+    $self->_zip_member_contents($zip_member, $sheet_xml);
+  }
+
+  # feed internal structure for shared strings
+  my $strings_xml = $self->_zip_member_contents('xl/sharedStrings.xml');
+  my $old_string_index = 0;
+  my @strings_to_keep;
+  while ($strings_xml =~ m[<si>(.*?)</si>]sg) {
+    my $innerXML  = $1;
+    my $new_index = $remap_index[$old_string_index];
+    if (defined $new_index) {
+      # concatenate contents from all <t> nodes (usually there is only 1) and decode XML entities
+      my $string = join "", ($innerXML =~ m[<t[^>]*>(.+?)</t>]sg);
+      _decode_xml_entities($string);
+      $self->{shared_strings}{$string} = $new_index;
+    }
+    $old_string_index++;
+  }
+
+  $self->{last_string_id} = $next_string_index;
+}
+
+
+
+
+
+sub zip {shift->{zip}}
+
+  ## COPIED FROM VALUEREADER !!
+  
+
+sub _zip_member_contents {
+  my ($self, $member) = @_;
+
+  my $contents = $self->zip->contents($member)
+    or die "no contents for member $member";
+  utf8::decode($contents);
+
+  return $contents;
+}
+
+
+sub _zip_member_name_for_sheet {
+  my ($self, $sheet) = @_;
+
+  # check that sheet name was given
+  $sheet or die "missing sheet name or number";
+
+  # get sheet id
+  my $id = $self->sheets->{$sheet};
+  $id //= $sheet if $sheet =~ /^\d+$/;
+  $id or die "no such sheet: $sheet";
+
+  # construct member name for that sheet
+  return "xl/worksheets/sheet$id.xml";
+}
+
+sub sheets { # TODO : rename, risk of confusion with $self->{sheets}
+  my ($self) = @_;
+  return $self->{workbook_data}{sheets};
+}
+
+
+sub _workbook_data {
+  my $self = shift;
+
+  # read from the workbook.xml zip member
+  my $workbook = $self->_zip_member_contents('xl/workbook.xml');
+
+  # extract sheet names
+  my @sheet_names = ($workbook =~ m[<sheet name="(.+?)"]g);
+  my %sheets      = map {$sheet_names[$_] => $_+1} 0 .. $#sheet_names;
+
+  # does this workbook use the 1904 calendar ?
+  my ($date1904) = $workbook =~ m[date1904="(.+?)"];
+  my $base_year  = $date1904 && $date1904 =~ /^(1|true)$/ ? 1904 : 1900;
+
+  return {sheets => \%sheets, base_year => $base_year};
+}
+
+
+
+
+sub _decode_xml_entities {
+  state $xml_entities   = { amp  => '&',
+                            lt   => '<',
+                            gt   => '>',
+                            quot => '"',
+                            apos => "'",
+                           };
+  state $entity_names   = join '|', keys %$xml_entities;
+  state $regex_entities = qr/&($entity_names);/;
+
+  # substitute in-place
+  $_[0] =~ s/$regex_entities/$xml_entities->{$1}/eg;
+}
+
+
+
+1;
 __END__
 
 =encoding utf-8

@@ -47,7 +47,7 @@ my $content_types = $zip->contents('[Content_Types].xml');
 like $content_types, qr[<Override PartName="/xl/worksheets/sheet1.xml"], 'content-types';
 
 my $workbook = $zip->contents('xl/workbook.xml');
-like $workbook, qr[<sheets><sheet name="s1" sheetId="1" r:id="rId1"/>.+</sheets>], 'workbook';
+like $workbook, qr[<sheets>.*?<sheet name="s1" sheetId="1" r:id="rId1"/>.+</sheets>], 'workbook';
 
 my $sheet1 = $zip->contents('xl/worksheets/sheet1.xml');
 like $sheet1, qr[<sheetData><row r="1" spans="1:4"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v>],  'sheet1';
