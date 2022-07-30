@@ -16,8 +16,13 @@ my $VERSION = '0.2';
 
 
 # TODO
-# - handle 1904
 
+# - keep workbook.xml, recreate sheets part
+# - keep workbook rels
+# what is attr 'sheetId' in workbook.xml ??
+
+
+# - handle 1904
 
 
 #======================================================================
@@ -236,7 +241,7 @@ sub add_table {
   my @xml = (
     qq{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
     qq{<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"}.
-         qq{ id="$table->{id}" displayName="$table_name" ref="$ref" totalsRowShown="0">},
+         qq{ id="$table->{id}" name="$table_name" displayName="$table_name" ref="$ref" totalsRowShown="0">},
     qq{<autoFilter ref="$ref"/>},
     qq{<tableColumns count="$#col_names">},
     @columns,
@@ -254,6 +259,8 @@ sub add_table {
 
 sub worksheet_rels {
   my ($self, $sheet) = @_;
+
+  warn "MAKING RELS for $sheet->{id} : tables ", join(",", $sheet->{table_ids}->@*), "\n";
 
   my @rels = map {("officeDocument/2006/relationships/table" => "../tables/table$_.xml")}
                  $sheet->{table_ids}->@*;
@@ -278,16 +285,26 @@ sub save_as {
   $zip->addString($self->content_types,      "[Content_Types].xml");
   $zip->addString($self->core,               "docProps/core.xml");
   $zip->addString($self->app,                "docProps/app.xml");
-  $zip->addString($self->workbook,           "xl/workbook.xml");
   $zip->addString($self->_rels,              "_rels/.rels");
-  $zip->addString($self->workbook_rels,      "xl/_rels/workbook.xml.rels");
+  if ($self->{template}) {
+    # $self->update_workbook;
+  }
+  else {
+    $zip->addString($self->workbook,           "xl/workbook.xml");
+    $zip->addString($self->workbook_rels,      "xl/_rels/workbook.xml.rels");
+  }
   $zip->addString($self->shared_strings,     "xl/sharedStrings.xml");
   $zip->addString($self->styles,             "xl/styles.xml");
+
+  warn "WRITE WKBK ", $zip->contents("xl/workbook.xml"), "\n";
+
+
+
 
   # write the Zip archive
   my $write_result = $zip->writeToFileNamed($file_name);
   $write_result == AZ_OK
-    or croak "could not write into $self->{xlsx}";
+    or croak "could not write into $file_name";
 }
 
 
@@ -310,9 +327,6 @@ sub recompute_sheet_indices {
   }
 
   foreach my $sheet (grep {$_->{remap}} values $self->{sheets}->%*) {
-
-    warn "REMAP sheet $sheet->{id} TO $sheet->{remap}\n";
-
     my $old_name = $self->sheet_member($sheet->{id});
     my $new_name = $self->sheet_member($sheet->{remap});
     $self->rename_zip_member($old_name, $new_name);
@@ -343,9 +357,6 @@ sub recompute_table_indices {
 
   foreach my $table (grep {$remap{$_->{id}}} values $self->{tables}->%*) {
     my $new_id = $remap{$table->{id}};
-
-    warn "REMAP TABLE  $table->{id} TO $new_id\n";
-
     my $old_name = $self->table_member($table->{id});
     my $new_name = $self->table_member($new_id);
     $self->rename_zip_member($old_name, $new_name);
@@ -360,6 +371,10 @@ sub recompute_table_indices {
       $sheet->{table_ids} = \@new_table_ids;
       my $rels_file = "xl/worksheets/_rels/sheet$sheet->{id}.xml.rels";
       $self->zip->removeMember($rels_file);
+
+      warn "RECOMPUTE RELS for $sheet->{id} : ", join(",", @new_table_ids), "\n";
+
+
       $self->{zip}->addString($self->worksheet_rels($sheet), $rels_file);
     }
   }
@@ -412,29 +427,52 @@ sub workbook {
   my ($self) = @_;
 
   # opening XML
-  my @xml = (
-    qq{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
-    qq{<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"},
-             qq{ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">},
-    qq{<sheets>},
-    );
+  my $xml = 
+    qq{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>} .
+    qq{<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"} .
+             qq{ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">} .
+    qq{<sheets>} .
+    $self->_declare_sheets_in_workbook .
+    q{</sheets></workbook>};
+
+  return encode_utf8($xml);
+}
+
+
+sub _declare_sheets_in_workbook {
+  my ($self) = @_;
+
+  my $xml = "";
 
   # references to the worksheets
   my @ordered_sheet_names = sort {$self->{sheets}{$a}{id} <=> $self->{sheets}{$b}{id}} keys $self->{sheets}->%*;
   my $rId = 1;
   foreach my $sheet_name (@ordered_sheet_names) {
-    push @xml, qq{<sheet name="$sheet_name" sheetId="$rId" r:id="rId$rId"/>};
+    $xml .= qq{<sheet name="$sheet_name" sheetId="$rId" r:id="rId$rId"/>};
     $rId++;  # THINK : not clear if rId must absolutely be the same as $sheet->{id}
   }
 
-  # closing XML
-  push @xml, q{</sheets>}, q{</workbook>};
-
-  return encode_utf8(join "", @xml);
+  return $xml;
 }
 
+sub update_workbook {
+  my ($self) = @_;
+
+  my $sheets_xml = $self->_declare_sheets_in_workbook;
+  my $workbook_xml = $self->_zip_member_contents('xl/workbook.xml');
+warn "BEFORE: ", $workbook_xml, "\n";
+  $workbook_xml =~ s[<sheets>.*?</sheets>][<sheets>$sheets_xml</sheets>];
+warn "AFTER: ", $workbook_xml, "\n";
+  $self->zip->contents('xl/workbook.xml', $workbook_xml);
+
+  # TODO : should probably rewrite the rels file
+  # my $rels_xml = $self->_zip_member_contents("xl/_rels/workbook.xml.rels");
+  # my @rels = map {("officeDocument/2006/relationships/worksheet" => "worksheets/sheet$_->{id}.xml")}
+  #                sort {$a->{id} <=> $b->{id}} values $self->{sheets}->%*;
 
 
+
+}
 
 
 sub content_types {
@@ -639,7 +677,7 @@ sub load_template {
 
   # parse existing sheets to gather string indices and table indices
   my @keep_string;
-  $self->parse_sheet($_, \@keep_string) foreach values $self->{sheets}->%*;
+  $self->parse_sheet($_, \@keep_string) foreach sort {$a->{id} <=> $b->{id}} values $self->{sheets}->%*;
 
   # recompute indices for strings that must be kept
   my $next_string_index = 0;
@@ -664,9 +702,7 @@ sub load_template {
   $self->{zip}->removeMember($_) for ("[Content_Types].xml",
                                       "docProps/core.xml",
                                       "docProps/app.xml",
-                                      "xl/workbook.xml",
                                       "_rels/.rels",
-                                      "xl/_rels/workbook.xml.rels",
                                       "xl/sharedStrings.xml",
                                       "xl/styles.xml",
                                       'xl/sharedStrings.xml',
@@ -705,6 +741,9 @@ sub parse_sheet {
   $sheet->{table_ids}
     = [($rels_xml =~ m[relationships/table" Target="../tables/table(\d+).xml"]g)];
 
+  warn "SHEET $sheet->{id} has tables " . join(",", $sheet->{table_ids}->@*) . "\n";
+
+
   foreach my $table_id ($sheet->{table_ids}->@*) {
     my $member_name = "xl/tables/table$table_id\.xml";
     if ($sheet->{to_remove}) {
@@ -714,8 +753,14 @@ sub parse_sheet {
       my $table_xml = $self->_zip_member_contents($member_name);
       my ($table_name) = ($table_xml =~ m{<table.+?displayName="(\w+)"});
       $self->{tables}{$table_name} = {id => $table_id};
+
+      warn "PARSED TABLE $table_name => $table_id\n";
+
     }
   }
+
+
+  delete $sheet->{table_ids} if $sheet->{to_remove};
 }
 
 
