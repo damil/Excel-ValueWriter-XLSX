@@ -12,7 +12,7 @@ use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
 use Encode                qw/encode_utf8/;
 
-my $VERSION = '0.3';
+our $VERSION = '0.6';
 
 #======================================================================
 # GLOBALS
@@ -35,6 +35,10 @@ my %params_spec = (
                         | (?<m>\d\d?)    /  (?<d>\d\d?) /  (?<y>\d\d\d\d)) # mm/dd/yyyy
                       $]x},
  );
+
+
+my %entity       = ( '<' => '&lt;', '>' => '&gt;', '&' => '&amp;' );
+my $entity_regex = do {my $chars = join "", keys %entity; qr/[$chars]/};
 
 
 #======================================================================
@@ -132,7 +136,7 @@ sub add_sheet {
       (my $tag, my $attrs, $val)
         = looks_like_number $val             ? (v => ""                  , $val                          )
         : $date_regex && $val =~ $date_regex ? (v => qq{ s="$DATE_STYLE"}, n_days($+{y}, $+{m}, $+{d})   )
-        : $val =~ s/^=//                     ? (f => "",                   $val                          )
+        : $val =~ /^=/                       ? (f => "",                   escape_formula($val)          )
         :                                      (v => qq{ t="s"}          , $self->add_shared_string($val));
 
       # add the new XML cell
@@ -238,7 +242,7 @@ sub worksheet_rels {
 #======================================================================
 
 sub save_as {
-  my ($self, $file_name) = @_;
+  my ($self, $target) = @_;
 
   # assemble all parts within the zip, except sheets and tables that were already added previously
   my $zip = $self->{zip};
@@ -252,9 +256,9 @@ sub save_as {
   $zip->addString($self->styles,             "xl/styles.xml");
 
   # write the Zip archive
-  my $write_result = $zip->writeToFileNamed($file_name);
+  my $write_result = ref $target ? $zip->writeToFileHandle($target) : $zip->writeToFileNamed($target);
   $write_result == AZ_OK
-    or croak "could not write into $self->{xlsx}";
+    or croak "could not save Zip archive into " . (ref($target) || $target);
 }
 
 
@@ -455,18 +459,25 @@ sub n_tables {
 #======================================================================
 
 
-my %entity = ( '<' => '&lt;', '>' => '&gt;', '&' => '&amp;' );
-
 sub si_node {
   my ($string) = @_;
 
   # build XML node for a single shared string
-  $string =~ s/([<>&])/$entity{$1}/eg;
+  $string =~ s/($entity_regex)/$entity{$1}/g;
   my $maybe_preserve_space = $string =~ /^\s|\s$/ ? ' xml:space="preserve"' : '';
   my $node = qq{<si><t$maybe_preserve_space>$string</t></si>};
 
   return $node;
 }
+
+sub escape_formula {
+  my ($string) = @_;
+
+  $string =~ s/^=//;
+  $string =~ s/($entity_regex)/$entity{$1}/g;
+  return $string;
+}
+
 
 sub n_days {
   my ($y, $m, $d) = @_;
@@ -588,9 +599,10 @@ only once within the workbook).
 
 =head2 save_as
 
-  $writer->save_as($filename);
+  $writer->save_as($target);
 
-Writes the workbook contents into the specified C<$filename>.
+Writes the workbook contents into the specified C<$target>, which can be either
+a filename or filehandle opened for writing.
 
 
 =head1 ARCHITECTURAL NOTE
