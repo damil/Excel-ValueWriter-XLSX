@@ -12,7 +12,7 @@ use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
 use Encode                qw/encode_utf8/;
 
-our $VERSION = '1.02';
+our $VERSION = '1.03';
 
 #======================================================================
 # GLOBALS
@@ -175,12 +175,7 @@ sub add_sheet {
   # insert the sheet and its rels into the zip archive
   my $sheet_id   = $self->n_sheets;
   my $sheet_file = "sheet$sheet_id.xml";
-
-  open my $fh, ">", "d:/temp/foo.xml" or die $!;
-  print $fh join("", @xml);
-  close $fh;
-
-  $self->{zip}->addString(join("", @xml),
+  $self->{zip}->addString(encode_utf8(join("", @xml)),
                           "xl/worksheets/$sheet_file",
                           $self->{compression_level});
   $self->{zip}->addString($self->worksheet_rels(@table_rels),
