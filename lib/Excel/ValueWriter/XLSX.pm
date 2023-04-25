@@ -12,7 +12,7 @@ use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
 use Encode                qw/encode_utf8/;
 
-our $VERSION = '1.03';
+our $VERSION = '1.04';
 
 #======================================================================
 # GLOBALS
@@ -141,12 +141,13 @@ sub add_sheet {
       defined $val and length $val or next COLUMN;
 
       # choose XML attributes and inner value
+      # NOTE : for perl, looks_like_number( "INFINITY") is TRUE! Hence the test $val !~ /^\pL/
       (my $tag, my $attrs, $val)
-        = looks_like_number $val             ? (v => ""                  , $val                          )
-        : $date_regex && $val =~ $date_regex ? (v => qq{ s="$DATE_STYLE"}, n_days($+{y}, $+{m}, $+{d})   )
-        : $bool_regex && $val =~ $bool_regex ? (v => qq{ t="b"}          , $1 ? 1 : 0                    )
-        : $val =~ /^=/                       ? (f => "",                   escape_formula($val)          )
-        :                                      (v => qq{ t="s"}          , $self->add_shared_string($val));
+        = looks_like_number($val) && $val !~ /^\pL/ ? (v => ""                  , $val                          )
+        : $date_regex && $val =~ $date_regex        ? (v => qq{ s="$DATE_STYLE"}, n_days($+{y}, $+{m}, $+{d})   )
+        : $bool_regex && $val =~ $bool_regex        ? (v => qq{ t="b"}          , $1 ? 1 : 0                    )
+        : $val =~ /^=/                              ? (f => "",                   escape_formula($val)          )
+        :                                             (v => qq{ t="s"}          , $self->add_shared_string($val));
 
       # add the new XML cell
       my $cell = sprintf qq{<c r="%s%d"%s><%s>%s</%s></c>}, $col_letter, $row_num, $attrs, $tag, $val, $tag;

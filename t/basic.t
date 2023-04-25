@@ -22,7 +22,7 @@ $writer->add_sheet(s1 => à_table => [[qw/foo bar barbar gig/],
 $writer->add_sheet(table_oubliée => (undef) => [[qw/aa bb cc dd/],
                                                 [45, 56],
                                                 [qw/il était une bergère/],
-                                                [99, 33, 33]]);
+                                                [99, 33, 33, 'INFINITY']]);
 
 # sheet with a large number of random values
 my @headers_for_rand = map {"h$_"} 1 .. 300;
@@ -65,6 +65,7 @@ like $table1, qr[<tableColumn id="1"], 'table1';
 my $strings = $zip->contents('xl/sharedStrings.xml');
 like $strings, qr[<si><t>foo</t></si><si><t>bar</t></si>],     'shared strings';
 like $strings, qr[<si><t>\Q=[foo]+[bar]&amp;[bar]\E</t></si>], 'escaped formula';
+like $strings, qr[<si><t>INFINITY</t></si>],                   'INFINITY treated as a string';
 
 # end of tests
 done_testing;
