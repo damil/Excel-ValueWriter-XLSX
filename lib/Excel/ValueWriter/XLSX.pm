@@ -520,11 +520,25 @@ sub n_tables {
 #======================================================================
 
 
-sub si_node {
+sub si_node { # build XML node for a single shared string
   my ($string) = @_;
 
-  # build XML node for a single shared string
+  # escape XML entities
   $string =~ s/($entity_regex)/$entity{$1}/g;
+
+
+  # Excel escapes control characters with _xHHHH_ and also escapes any
+  # literal strings of that type by encoding the leading underscore. So
+  # "\0" -> _x0000_ and "_x0000_" -> _x005F_x0000_.
+  # The following substitutions deal with those cases.
+  # This code is borrowed from Excel::Writer::XLSX::Package::SharedStrings -- thank you, John McNamara
+
+  # Escape the escape.
+  $string =~ s/(_x[0-9a-fA-F]{4}_)/_x005F$1/g;
+
+  # Convert control character to the _xHHHH_ escape.
+  $string =~ s/([\x00-\x08\x0B-\x1F])/sprintf "_x%04X_", ord($1)/eg;
+
   my $maybe_preserve_space = $string =~ /^\s|\s$/ ? ' xml:space="preserve"' : '';
   my $node = qq{<si><t$maybe_preserve_space>$string</t></si>};
 
