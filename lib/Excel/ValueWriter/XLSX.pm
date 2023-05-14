@@ -12,7 +12,7 @@ use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
 use Encode                qw/encode_utf8/;
 
-our $VERSION = '1.04';
+our $VERSION = '1.05';
 
 #======================================================================
 # GLOBALS
