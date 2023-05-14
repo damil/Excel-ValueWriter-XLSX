@@ -1,6 +1,8 @@
 Revision history for Excel-ValueWriter-XLSX
 
 
+  - add_sheet() can take a DBI::st or DBIx::DataModel::Statement as argument
+
 1.04     25.04.2023
   - perl treats strings "infinity" or "NaN" as numbers ... but Excel does not
   - escape control chars in the form _x...._ (borrowed from Excel::Writer::XLSX::Package::SharedStrings)
