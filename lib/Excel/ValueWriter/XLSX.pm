@@ -12,7 +12,7 @@ use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
 use Encode                qw/encode_utf8/;
 
-our $VERSION = '1.05';
+our $VERSION = '1.06';
 
 #======================================================================
 # GLOBALS
@@ -117,6 +117,8 @@ sub add_sheet {
     $headers //= $rows_maker->{NAME}; # see L<DBI>
   }
   elsif (blessed $rows_maker && $rows_maker->isa('DBIx::DataModel::Statement')) {
+    DBIx::DataModel->VERSION >= 3.0
+      or croak 'add_sheet(.., $statement) : requires DBIx::DataModel >= 3.0; your version is ', DBIx::DataModel->VERSION;
     $headers //= $rows_maker->sth->{NAME};
     $next_row  = sub {my $row = $rows_maker->next; return $row ? [@{$row}{@$headers}] : ()};
   }
@@ -743,7 +745,7 @@ an executed L<DBI> statement handle
 
 =item *
 
-a L<DBIx::DataModel::Statement> object
+a L<DBIx::DataModel::Statement> object (version 3.0 or greater)
 
 =back
 
