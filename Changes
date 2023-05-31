@@ -1,5 +1,8 @@
 Revision history for Excel-ValueWriter-XLSX
 
+1.07     31.05.2023
+  - make sure that Excel tables have at least one data row
+
 1.06     18.05.2023
   - if DBIx::DataModel is used, it must be >= 3.0
 

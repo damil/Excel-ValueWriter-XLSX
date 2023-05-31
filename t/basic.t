@@ -38,6 +38,9 @@ $writer->add_sheet(With_header => t_header => [qw/col1 col2/], [[33, 44], [11, 2
 $writer->add_sheet(Empty1 => t_empty => []);
 $writer->add_sheet(Empty2 => (undef) => []);
 
+# a table without data
+$writer->add_sheet(Dataless => t_dataless => [qw/col1 col2/] => []);
+
 # defined names
 $writer->add_defined_name(my_formula  => q{'s1'!$A$1&'s1'!$A$2}, "no comment");
 $writer->add_defined_name(my_constant => q{"constant_value"});
@@ -71,6 +74,8 @@ like $strings, qr[<si><t>INFINITY</t></si>],                     'INFINITY treat
 like $strings, qr[<si><t>ctrl_x0001__x0002__x0003_</t></si>],    'control chars';
 like $strings, qr[<si><t xml:space="preserve"> space </t></si>], 'preserve space';
 
+my $sheet7 = $zip->contents('xl/worksheets/sheet7.xml');
+like $sheet7, qr[<row r="2"], 'sheet 7 has an empty data row';
 
 # end of tests
 done_testing;

@@ -12,7 +12,7 @@ use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
 use Encode                qw/encode_utf8/;
 
-our $VERSION = '1.06';
+our $VERSION = '1.07';
 
 #======================================================================
 # GLOBALS
@@ -178,12 +178,16 @@ sub add_sheet {
     push @xml, $row_xml;
   }
 
+  # if this sheet contains an Excel table, make sure there is at least one data row
+  ++$row_num and push @xml, qq{<row r="$row_num" spans="1:1"></row>}
+    if $table_name && $row_num == 1;
+
   # close sheet data
   push @xml, q{</sheetData>};
 
   # if required, add the table corresponding to this sheet into the zip archive, and refer to it in XML
   my @table_rels;
-  if ($table_name && $row_num) {
+  if ($table_name && $headers) {
     my $table_id = $self->add_table($table_name, $col_letters[-1], $row_num, @$headers);
     push @table_rels, $table_id;
     push @xml, q{<tableParts count="1"><tablePart r:id="rId1"/></tableParts>};
