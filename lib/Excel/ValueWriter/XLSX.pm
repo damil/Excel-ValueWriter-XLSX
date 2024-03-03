@@ -94,87 +94,38 @@ sub add_sheet {
   none {$sheet_name eq $_} @{$self->{sheets}}
     or croak "this workbook already has a sheet named '$sheet_name'";
 
-  # local copies for convenience
-  my $date_regex = $self->{date_regex};
-  my $bool_regex = $self->{bool_regex};
-
   # iterator for generating rows; either received as argument or built as a closure upon an array
   my $row_iterator = $self->_build_row_iterator($rows_maker, \$headers);
-
-  # array of column references in A1 Excel notation
-  my @col_letters = ('A'); # this array will be expanded on demand in the loop below
 
   # register the sheet name 
   push @{$self->{sheets}}, $sheet_name;
 
-  # start building XML for the sheet
-  my @xml = (
+  my ($last_row, $last_col, $xml) = $self->build_rows($headers, $row_iterator, $table_name);
+
+  # add XML preamble and close sheet data
+  my $preamble = join "", 
     q{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
     q{<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"},
               q{ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">},
     q{<sheetData>},
-    );
-
-  # loop over rows and columns
-  my $row_num = 0;
- ROW:
-  for (my $row = $headers; $row; $row = $row_iterator->()) {
-    $row_num++;
-    my $last_col = @$row or next ROW;
-    my @cells;
-
-  COLUMN:
-    foreach my $col (0 .. $last_col-1) {
-
-      # if this column letter is not known yet, compute it using Perl's increment op on strings
-      my $col_letter = $col_letters[$col]
-                   //= do {my $prev_letter = $col_letters[$col-1]; ++$prev_letter};
-
-      # get the value; if the cell is empty, no need to write it into the XML
-      my $val = $row->[$col];
-      defined $val and length $val or next COLUMN;
-
-      # choose XML attributes and inner value
-      # NOTE : for perl, looks_like_number( "INFINITY") is TRUE! Hence the test $val !~ /^\pL/
-      (my $tag, my $attrs, $val)
-        = looks_like_number($val) && $val !~ /^\pL/ ? (v => ""                  , $val                          )
-        : $date_regex && $val =~ $date_regex        ? (v => qq{ s="$DATE_STYLE"}, n_days($+{y}, $+{m}, $+{d})   )
-        : $bool_regex && $val =~ $bool_regex        ? (v => qq{ t="b"}          , $1 ? 1 : 0                    )
-        : $val =~ /^=/                              ? (f => "",                   escape_formula($val)          )
-        :                                             (v => qq{ t="s"}          , $self->add_shared_string($val));
-
-      # add the new XML cell
-      my $cell = sprintf qq{<c r="%s%d"%s><%s>%s</%s></c>}, $col_letter, $row_num, $attrs, $tag, $val, $tag;
-      push @cells, $cell;
-    }
-
-    # generate the row XML and add it to the sheet
-    my $row_xml = join "", qq{<row r="$row_num" spans="1:$last_col">}, @cells, qq{</row>};
-    push @xml, $row_xml;
-  }
-
-  # if this sheet contains an Excel table, make sure there is at least one data row
-  ++$row_num and push @xml, qq{<row r="$row_num" spans="1:1"></row>}
-    if $table_name && $row_num == 1;
-
-  # close sheet data
-  push @xml, q{</sheetData>};
+    ;
+  $xml = "$preamble$xml</sheetData>";
 
   # if required, add the table corresponding to this sheet into the zip archive, and refer to it in XML
   my @table_rels;
   if ($table_name && $headers) {
-    my $table_id = $self->add_table($table_name, $col_letters[-1], $row_num, @$headers);
+    my $table_id = $self->add_table($table_name, $last_col, $last_row, @$headers);
     push @table_rels, $table_id;
-    push @xml, q{<tableParts count="1"><tablePart r:id="rId1"/></tableParts>};
+    $xml .= q{<tableParts count="1"><tablePart r:id="rId1"/></tableParts>};
   }
 
   # close the worksheet xml
-  push @xml, q{</worksheet>};
+  $xml .= q{</worksheet>};
 
   # insert the sheet and its rels into the zip archive
   my $sheet_id   = $self->n_sheets;
   my $sheet_file = "sheet$sheet_id.xml";
-  $self->add_string_to_zip(encode_utf8(join("", @xml)),        "xl/worksheets/$sheet_file"           );
+  $self->add_string_to_zip(encode_utf8($xml),                  "xl/worksheets/$sheet_file"           );
   $self->add_string_to_zip($self->worksheet_rels(@table_rels), "xl/worksheets/_rels/$sheet_file.rels");
 
   return $sheet_id;
@@ -216,7 +167,62 @@ sub _build_row_iterator {
 }
 
 
+sub build_rows {
+  my ($self, $headers, $row_iterator, $table_name) = @_;
 
+  my $xml = "";
+
+  # local copies for convenience
+  my $date_regex = $self->{date_regex};
+  my $bool_regex = $self->{bool_regex};
+
+  # array of column references in A1 Excel notation
+  my @col_letters = ('A'); # this array will be expanded on demand in the loop below
+
+  # loop over rows and columns
+  my $row_num = 0;
+ ROW:
+  for (my $row = $headers; $row; $row = $row_iterator->()) {
+    $row_num++;
+    my $last_col = @$row or next ROW;
+    my @cells;
+
+  COLUMN:
+    foreach my $col (0 .. $last_col-1) {
+
+      # if this column letter is not known yet, compute it using Perl's increment op on strings (so 'AA' comes after 'Z')
+      my $col_letter = $col_letters[$col]
+                   //= do {my $prev_letter = $col_letters[$col-1]; ++$prev_letter};
+
+      # get the value; if the cell is empty, no need to write it into the XML
+      my $val = $row->[$col];
+      defined $val and length $val or next COLUMN;
+
+      # choose XML attributes and inner value
+      # NOTE : for perl, looks_like_number( "INFINITY") is TRUE! Hence the test $val !~ /^\pL/
+      (my $tag, my $attrs, $val)
+        = looks_like_number($val) && $val !~ /^\pL/ ? (v => ""                  , $val                          )
+        : $date_regex && $val =~ $date_regex        ? (v => qq{ s="$DATE_STYLE"}, n_days($+{y}, $+{m}, $+{d})   )
+        : $bool_regex && $val =~ $bool_regex        ? (v => qq{ t="b"}          , $1 ? 1 : 0                    )
+        : $val =~ /^=/                              ? (f => "",                   escape_formula($val)          )
+        :                                             (v => qq{ t="s"}          , $self->add_shared_string($val));
+
+      # add the new XML cell
+      my $cell = sprintf qq{<c r="%s%d"%s><%s>%s</%s></c>}, $col_letter, $row_num, $attrs, $tag, $val, $tag;
+      push @cells, $cell;
+    }
+
+    # generate the row XML and add it to the sheet
+    my $row_xml = join "", qq{<row r="$row_num" spans="1:$last_col">}, @cells, qq{</row>};
+    $xml .= $row_xml;
+  }
+
+  # if this sheet contains an Excel table, make sure there is at least one data row
+  ++$row_num and $xml .= qq{<row r="$row_num" spans="1:1"></row>}
+    if $table_name && $row_num == 1;
+
+  return ($row_num, $col_letters[-1], $xml);
+}
 
 
 sub add_sheets_from_database {
@@ -341,8 +347,6 @@ sub add_string_to_zip {
 
   $self->{zip}->addString($content, $name, $self->{compression_level});
 }
-
-
 
 
 
