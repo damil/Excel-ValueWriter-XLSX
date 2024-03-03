@@ -83,10 +83,10 @@ sub new {
 
 sub add_sheet {
   # 3rd parameter ($headers) may be omitted -- so we insert an undef if necessary
-  splice @_, 3, 0, undef if @_ < 5;
+  splice @_, 3, 0, undef if @_ < 5 or @_ == 5 && (ref $_[4] // '') eq 'HASH';
 
   # now we can parse the parameters
-  my ($self, $sheet_name, $table_name, $headers, $rows_maker) = @_;
+  my ($self, $sheet_name, $table_name, $headers, $rows_maker, $options) = @_;
 
   # check if the given sheet name is valid
   $sheet_name =~ $SHEET_NAME
@@ -99,32 +99,7 @@ sub add_sheet {
   my $bool_regex = $self->{bool_regex};
 
   # iterator for generating rows; either received as argument or built as a closure upon an array
-  my $next_row;
-  my $ref = ref $rows_maker;
-  if ($ref && $ref eq 'CODE') {
-    $next_row  = $rows_maker;
-    $headers //= $next_row->();
-  }
-  elsif ($ref && $ref eq 'ARRAY') {
-    my $i = 0;
-    $next_row  = sub { $i < @$rows_maker ? $rows_maker->[$i++] : undef};
-    $headers //= $next_row->();
-  }
-  elsif (blessed $rows_maker && $rows_maker->isa('DBI::st')) {
-    $rows_maker->{Executed}
-      or croak '->add_sheet(..., $sth) : the statement handle must be executed (call the $sth->execute method)';
-    $next_row  = sub { $rows_maker->fetchrow_arrayref};
-    $headers //= $rows_maker->{NAME}; # see L<DBI>
-  }
-  elsif (blessed $rows_maker && $rows_maker->isa('DBIx::DataModel::Statement')) {
-    DBIx::DataModel->VERSION >= 3.0
-      or croak 'add_sheet(.., $statement) : requires DBIx::DataModel >= 3.0; your version is ', DBIx::DataModel->VERSION;
-    $headers //= $rows_maker->sth->{NAME};
-    $next_row  = sub {my $row = $rows_maker->next; return $row ? [@{$row}{@$headers}] : ()};
-  }
-  else {
-    croak 'add_sheet() : missing or invalid last argument ($rows_maker)';
-  }
+  my $row_iterator = $self->_build_row_iterator($rows_maker, \$headers);
 
   # array of column references in A1 Excel notation
   my @col_letters = ('A'); # this array will be expanded on demand in the loop below
@@ -143,7 +118,7 @@ sub add_sheet {
   # loop over rows and columns
   my $row_num = 0;
  ROW:
-  for (my $row = $headers; $row; $row = $next_row->()) {
+  for (my $row = $headers; $row; $row = $row_iterator->()) {
     $row_num++;
     my $last_col = @$row or next ROW;
     my @cells;
@@ -199,15 +174,48 @@ sub add_sheet {
   # insert the sheet and its rels into the zip archive
   my $sheet_id   = $self->n_sheets;
   my $sheet_file = "sheet$sheet_id.xml";
-  $self->{zip}->addString(encode_utf8(join("", @xml)),
-                          "xl/worksheets/$sheet_file",
-                          $self->{compression_level});
-  $self->{zip}->addString($self->worksheet_rels(@table_rels),
-                          "xl/worksheets/_rels/$sheet_file.rels",
-                          $self->{compression_level});
+  $self->add_string_to_zip(encode_utf8(join("", @xml)),        "xl/worksheets/$sheet_file"           );
+  $self->add_string_to_zip($self->worksheet_rels(@table_rels), "xl/worksheets/_rels/$sheet_file.rels");
 
   return $sheet_id;
 }
+
+
+sub _build_row_iterator {
+  my ($self, $rows_maker, $headers_ref) = @_;
+
+  my $iterator;
+
+  my $ref = ref $rows_maker;
+  if ($ref && $ref eq 'CODE') {
+    $iterator  = $rows_maker;
+    $$headers_ref //= $iterator->();
+  }
+  elsif ($ref && $ref eq 'ARRAY') {
+    my $i = 0;
+    $iterator  = sub { $i < @$rows_maker ? $rows_maker->[$i++] : undef};
+    $$headers_ref //= $iterator->();
+  }
+  elsif (blessed $rows_maker && $rows_maker->isa('DBI::st')) {
+    $rows_maker->{Executed}
+      or croak '->add_sheet(..., $sth) : the statement handle must be executed (call the $sth->execute method)';
+    $iterator  = sub { $rows_maker->fetchrow_arrayref};
+    $$headers_ref //= $rows_maker->{NAME}; # see L<DBI>
+  }
+  elsif (blessed $rows_maker && $rows_maker->isa('DBIx::DataModel::Statement')) {
+    DBIx::DataModel->VERSION >= 3.0
+      or croak 'add_sheet(.., $statement) : requires DBIx::DataModel >= 3.0; your version is ', DBIx::DataModel->VERSION;
+    $$headers_ref //= $rows_maker->sth->{NAME};
+    $iterator  = sub {my $row = $rows_maker->next; return $row ? [@{$row}{@$$headers_ref}] : ()};
+  }
+  else {
+    croak 'add_sheet() : missing or invalid last argument ($rows_maker)';
+  }
+
+  return $iterator;
+}
+
+
 
 
 
@@ -280,9 +288,7 @@ sub add_table {
    );
 
   # insert into the zip archive
-  $self->{zip}->addString(encode_utf8(join "", @xml),
-                          "xl/tables/table$table_id.xml",
-                          $self->{compression_level});
+  $self->add_string_to_zip(encode_utf8(join "", @xml), "xl/tables/table$table_id.xml");
 
   return $table_id;
 }
@@ -314,21 +320,30 @@ sub save_as {
   my ($self, $target) = @_;
 
   # assemble all parts within the zip, except sheets and tables that were already added previously
-  my $zip = $self->{zip};
-  $zip->addString($self->content_types,  "[Content_Types].xml"        , $self->{compression_level});
-  $zip->addString($self->core,           "docProps/core.xml"          , $self->{compression_level});
-  $zip->addString($self->app,            "docProps/app.xml"           , $self->{compression_level});
-  $zip->addString($self->workbook,       "xl/workbook.xml"            , $self->{compression_level});
-  $zip->addString($self->_rels,          "_rels/.rels"                , $self->{compression_level});
-  $zip->addString($self->workbook_rels,  "xl/_rels/workbook.xml.rels" , $self->{compression_level});
-  $zip->addString($self->shared_strings, "xl/sharedStrings.xml"       , $self->{compression_level});
-  $zip->addString($self->styles,         "xl/styles.xml"              , $self->{compression_level});
+  $self->add_string_to_zip($self->content_types,  "[Content_Types].xml"       );
+  $self->add_string_to_zip($self->core,           "docProps/core.xml"         );
+  $self->add_string_to_zip($self->app,            "docProps/app.xml"          );
+  $self->add_string_to_zip($self->workbook,       "xl/workbook.xml"           );
+  $self->add_string_to_zip($self->_rels,          "_rels/.rels"               );
+  $self->add_string_to_zip($self->workbook_rels,  "xl/_rels/workbook.xml.rels");
+  $self->add_string_to_zip($self->shared_strings, "xl/sharedStrings.xml"      );
+  $self->add_string_to_zip($self->styles,         "xl/styles.xml"             );
 
   # write the Zip archive
-  my $write_result = ref $target ? $zip->writeToFileHandle($target) : $zip->writeToFileNamed($target);
+  my $write_result = ref $target ? $self->{zip}->writeToFileHandle($target) : $self->{zip}->writeToFileNamed($target);
   $write_result == AZ_OK
     or croak "could not save Zip archive into " . (ref($target) || $target);
 }
+
+
+sub add_string_to_zip {
+  my ($self, $content, $name) = @_;
+
+  $self->{zip}->addString($content, $name, $self->{compression_level});
+}
+
+
+
 
 
 sub _rels {
