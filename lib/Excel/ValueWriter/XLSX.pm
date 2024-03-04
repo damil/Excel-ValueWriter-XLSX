@@ -6,11 +6,12 @@ use utf8;
 use Archive::Zip          qw/AZ_OK COMPRESSION_LEVEL_DEFAULT/;
 use Scalar::Util          qw/looks_like_number blessed/;
 use List::Util            qw/none/;
-use Params::Validate      qw/validate_with SCALAR SCALARREF UNDEF/;
 use POSIX                 qw/strftime/;
 use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
 use Encode                qw/encode_utf8/;
+use Data::Domain 1.16     qw/:all/;
+
 
 our $VERSION = '1.07';
 
@@ -18,61 +19,92 @@ our $VERSION = '1.07';
 # GLOBALS
 #======================================================================
 
-my $DATE_STYLE = 1;                        # 0-based index into the <cellXfs> format for dates ..
-                                           # .. defined in the styles() method
+my $DATE_STYLE = 1;                           # 0-based index into the <cellXfs> format for dates ..
+                                              # .. defined in the styles() method
 
-my $SHEET_NAME = qr(^[^\\/?*\[\]]{1,31}$); # valid sheet names: <32 chars, no chars \/?*[] 
-my $TABLE_NAME = qr(^\w{3,}$);             # valid table names: >= 3 chars, no spaces
-
-
-# specification in Params::Validate format for checking parameters to the new() method 
-my %params_spec = (
-
-  # date_regex : for identifying dates in data cells. Should capture into $+{d}, $+{m} and $+{y}.
-  date_regex        => {type => SCALARREF|UNDEF, optional => 1, default =>
-                         qr[^(?: (?<d>\d\d?)    \. (?<m>\d\d?) \. (?<y>\d\d\d\d)  # dd.mm.yyyy
-                               | (?<y>\d\d\d\d) -  (?<m>\d\d?) -  (?<d>\d\d?)     # yyyy-mm-dd
-                               | (?<m>\d\d?)    /  (?<d>\d\d?) /  (?<y>\d\d\d\d)) # mm/dd/yyyy
-                             $]x},
-
-  # bool_regex : for identifying booleans in data cells. If true, should capture into $1
-  bool_regex        => {type => SCALARREF|UNDEF, optional => 1, default => qr[^(?:(TRUE)|FALSE)$]},
-
-  compression_level => {type => SCALAR, regex => qr/^\d$/, optional => 1, default => COMPRESSION_LEVEL_DEFAULT},
-
- );
-
+my $RX_SHEET_NAME = qr(^[^\\/?*\[\]]{1,31}$); # valid sheet names: <32 chars, no chars \/?*[] 
+my $RX_TABLE_NAME = qr(^\w{3,}$);             # valid table names: >= 3 chars, no spaces
 
 my %entity       = ( '<' => '&lt;', '>' => '&gt;', '&' => '&amp;' );
 my $entity_regex = do {my $chars = join "", keys %entity; qr/[$chars]/};
 
+#======================================================================
+# SIGNATURES FOR CONTROLLING ARGS TO PUBLIC METHODS
+#======================================================================
 
+my $sig_for_new = Struict(
+
+  # date_regex : for identifying dates in data cells. Should capture into $+{d}, $+{m} and $+{y}.
+  date_regex        => Regexp(-if_absent =>
+                         qr[^(?: (?<d>\d\d?)    \. (?<m>\d\d?) \. (?<y>\d\d\d\d)  # dd.mm.yyyy
+                               | (?<y>\d\d\d\d) -  (?<m>\d\d?) -  (?<d>\d\d?)     # yyyy-mm-dd
+                               | (?<m>\d\d?)    /  (?<d>\d\d?) /  (?<y>\d\d\d\d)) # mm/dd/yyyy
+                             $]),
+
+  # bool_regex : for identifying booleans in data cells. If true, should capture into $1
+  bool_regex        => Regexp(-if_absent => qr[^(?:(TRUE)|FALSE)$]),
+
+  # ZIP compression level
+  compression_level => Int(-range => [1, 9], -if_absent => COMPRESSION_LEVEL_DEFAULT),
+ )->meth_signature;
+
+
+my $sig_for_add_sheet = List(
+  String(-name => 'sheet_name', -regex => $RX_SHEET_NAME),
+  String(-name => 'table_name', -regex => $RX_TABLE_NAME, -optional => 1),
+  List  (-name => 'headers',    -all => String,           -optional => 1),
+  One_of(-name => 'rows_maker', -options => [List,                                      # an array of rows, or
+                                             Coderef,                                   # a row generator coderef, or
+                                             Obj(-isa => 'DBI::st'),                    # a DBI statement, or
+                                             Obj(-isa => 'DBIx::DataModel::Statement'), # a DBIx::DataModel statement
+                                            ]),
+  Struict(-name => 'options', -optional => 1, -fields => {
+      cols => One_of(List(-all => Num),
+                     List(-all => Struct(width => Num(-optional => 1),
+                                         style => Int(-optional => 1),
+                                         min   => Int(-optional => 1),
+                                         max   => Int(-optional => 1))))
+    }),
+ )->meth_signature;
+
+my $sig_for_add_sheets_from_database = List(-items => [Obj   (-isa     => 'DBI::db'),
+                                                       String(-default => "S.")],
+                                            -all   => String,
+ )->meth_signature;
+
+my $sig_for_add_defined_name = List(String(-name => "name"),
+                                    String(-name => "formula"),
+                                    String(-name => "comments", -optional => 1),
+  )->meth_signature;
+
+
+
+my $sig_for_save_as = One_of(String,
+                             Whatever(-does => 'IO'),
+  )->meth_signature;
+
+
+  
 #======================================================================
 # CONSTRUCTOR
 #======================================================================
 
 sub new {
-  my $class = shift;
+  my ($class, %self) = &$sig_for_new;
 
-  # check parameters and create $self
-  my $self = validate_with( params      => \@_,
-                            spec        => \%params_spec,
-                            allow_extra => 0,
-                           );
-
-  # initial values for internal data structures
-  $self->{sheets}                = []; # array of sheet names
-  $self->{tables}                = []; # array of table names
-  $self->{shared_string}         = {}; # ($string => $string_index)
-  $self->{n_strings_in_workbook} = 0;  # total nb of strings (including duplicates)
-  $self->{last_string_id}        = 0;  # index for the next shared string
-  $self->{defined_names}         = {}; # ($name => [$formula, $comment])
+  # initial values for internal data structures (constructor args cannot initialize those)
+  $self{sheets}                = []; # array of sheet names
+  $self{tables}                = []; # array of table names
+  $self{shared_string}         = {}; # ($string => $string_index)
+  $self{n_strings_in_workbook} = 0;  # total nb of strings (including duplicates)
+  $self{last_string_id}        = 0;  # index for the next shared string
+  $self{defined_names}         = {}; # ($name => [$formula, $comment])
 
   # immediately open a Zip archive
-  $self->{zip} = Archive::Zip->new;
+  $self{zip} = Archive::Zip->new;
 
   # return the constructed object
-  bless $self, $class;
+  bless \%self, $class;
 }
 
 
@@ -82,39 +114,38 @@ sub new {
 
 
 sub add_sheet {
-  # 3rd parameter ($headers) may be omitted -- so we insert an undef if necessary
+  # the 3rd parameter ($headers) may be omitted -- so we insert an undef if necessary
   splice @_, 3, 0, undef if @_ < 5 or @_ == 5 && (ref $_[4] // '') eq 'HASH';
 
   # now we can parse the parameters
-  my ($self, $sheet_name, $table_name, $headers, $rows_maker, $options) = @_;
-
-  # check if the given sheet name is valid
-  $sheet_name =~ $SHEET_NAME
-    or croak "'$sheet_name' is not a valid sheet name";
-  none {$sheet_name eq $_} @{$self->{sheets}}
-    or croak "this workbook already has a sheet named '$sheet_name'";
-
-  # iterator for generating rows; either received as argument or built as a closure upon an array
-  my $row_iterator = $self->_build_row_iterator($rows_maker, \$headers);
+  my ($self, $sheet_name, $table_name, $headers, $rows_maker, $options) = &$sig_for_add_sheet;
 
   # register the sheet name 
+  none {$sheet_name eq $_} @{$self->{sheets}}
+    or croak "this workbook already has a sheet named '$sheet_name'";
   push @{$self->{sheets}}, $sheet_name;
 
-  my ($last_row, $last_col, $xml) = $self->build_rows($headers, $row_iterator, $table_name);
+
+  # iterator for generating rows
+  my $row_iterator = $self->_build_row_iterator($rows_maker, \$headers);
+
+  # build inner XML
+  my ($xml, $last_row, $last_col) = $self->_build_rows($headers, $row_iterator, $table_name);
 
   # add XML preamble and close sheet data
   my $preamble = join "", 
     q{<?xml version="1.0" encoding="UTF-8" standalone="yes"?>},
     q{<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"},
-              q{ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">},
-    q{<sheetData>},
-    ;
-  $xml = "$preamble$xml</sheetData>";
+              q{ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">};
+  $preamble .= $self->_xml_for_options($options) if $options;
+  $preamble .= q{<sheetData>};
+  substr $xml, 0, 0, $preamble;
+  $xml .= q{</sheetData>};
 
   # if required, add the table corresponding to this sheet into the zip archive, and refer to it in XML
   my @table_rels;
   if ($table_name && $headers) {
-    my $table_id = $self->add_table($table_name, $last_col, $last_row, @$headers);
+    my $table_id = $self->_add_table($table_name, $last_col, $last_row, @$headers);
     push @table_rels, $table_id;
     $xml .= q{<tableParts count="1"><tablePart r:id="rId1"/></tableParts>};
   }
@@ -130,7 +161,6 @@ sub add_sheet {
 
   return $sheet_id;
 }
-
 
 sub _build_row_iterator {
   my ($self, $rows_maker, $headers_ref) = @_;
@@ -166,8 +196,7 @@ sub _build_row_iterator {
   return $iterator;
 }
 
-
-sub build_rows {
+sub _build_rows {
   my ($self, $headers, $row_iterator, $table_name) = @_;
 
   my $xml = "";
@@ -200,15 +229,16 @@ sub build_rows {
 
       # choose XML attributes and inner value
       # NOTE : for perl, looks_like_number( "INFINITY") is TRUE! Hence the test $val !~ /^\pL/
-      (my $tag, my $attrs, $val)
-        = looks_like_number($val) && $val !~ /^\pL/ ? (v => ""                  , $val                          )
-        : $date_regex && $val =~ $date_regex        ? (v => qq{ s="$DATE_STYLE"}, n_days($+{y}, $+{m}, $+{d})   )
-        : $bool_regex && $val =~ $bool_regex        ? (v => qq{ t="b"}          , $1 ? 1 : 0                    )
-        : $val =~ /^=/                              ? (f => "",                   escape_formula($val)          )
-        :                                             (v => qq{ t="s"}          , $self->add_shared_string($val));
+      (                                           my $tag,  my $attrs,            $val)
+      #                                              ====   =========             ====
+        = looks_like_number($val) && $val !~ /^\pL/ ? (v => ""                  , $val                           )
+        : $date_regex && $val =~ $date_regex        ? (v => qq{ s="$DATE_STYLE"}, n_days($+{y}, $+{m}, $+{d})    )
+        : $bool_regex && $val =~ $bool_regex        ? (v => qq{ t="b"}          , $1 ? 1 : 0                     )
+        : $val =~ /^=/                              ? (f => "",                   escape_formula($val)           )
+        :                                             (v => qq{ t="s"}          , $self->_add_shared_string($val));
 
       # add the new XML cell
-      my $cell = sprintf qq{<c r="%s%d"%s><%s>%s</%s></c>}, $col_letter, $row_num, $attrs, $tag, $val, $tag;
+      my $cell = qq{<c r="$col_letter$row_num"$attrs><$tag>$val</$tag></c>};
       push @cells, $cell;
     }
 
@@ -221,20 +251,50 @@ sub build_rows {
   ++$row_num and $xml .= qq{<row r="$row_num" spans="1:1"></row>}
     if $table_name && $row_num == 1;
 
-  return ($row_num, $col_letters[-1], $xml);
+  return ($xml, $row_num, $col_letters[-1]);
+}
+
+
+
+sub _xml_for_options {
+  my ($self, $options) = @_;
+
+  # currently there is only one option 'cols'. Handled below in a separate sub for better clarity.
+  return $self->_xml_for_cols_option($options->{cols});
+}
+
+
+sub _xml_for_cols_option {
+  my ($self, $cols) = @_;
+
+  my $xml = "<cols>";
+  my $next_col_num = 1;
+  foreach my $col (@$cols) {
+    # build attributes for the node
+    my %attrs = ref $col ? %$col : (width => $col); # cols => [6, ...] is just syntactic sugar for => [{witdh => 6}, ...]
+    $attrs{$_} //= $next_col_num for qw/min max/;   # colrange to which this <col> specification applies
+    $attrs{customWidth} //= 1 if $attrs{width};     # tells Excel that the width is not automatic
+
+    # generate XML from attributes
+    $xml .= join(" ", "<col", map {qq{$_="$attrs{$_}"}} keys %attrs) . "/>";
+
+    # compute index of next column
+    $next_col_num = $attrs{max} + 1;
+  }
+  $xml .= "</cols>";
+
+  return $xml;
 }
 
 
 sub add_sheets_from_database {
-  my ($self, $dbh, $sheet_prefix, @table_names) = @_;
+  my ($self, $dbh, $sheet_prefix, @table_names) = &$sig_for_add_sheets_from_database;
 
   # in absence of table names, get them from the database metadata
   if (!@table_names) {
     my $tables = $dbh->table_info(undef, undef, undef, 'TABLE')->fetchall_arrayref({});
     @table_names = map {$_->{TABLE_NAME}} @$tables;
   }
-
-  $sheet_prefix //= "S.";
 
   foreach my $table (@table_names) {
     my $sth = $dbh->prepare("select * from $table");
@@ -245,7 +305,7 @@ sub add_sheets_from_database {
 
 
 
-sub add_shared_string {
+sub _add_shared_string {
   my ($self, $string) = @_;
 
   # single quote before an initial equal sign is ignored (escaping the '=' like in Excel)
@@ -260,16 +320,12 @@ sub add_shared_string {
 
 
 
-sub add_table {
+sub _add_table {
   my ($self, $table_name, $last_col, $last_row, @col_names) = @_;
 
-  # check if the given table name is valid
-  $table_name =~ $TABLE_NAME
-    or croak "'$table_name' is not a valid table name";
+  # register this table
   none {$table_name eq $_} @{$self->{tables}}
     or croak "this workbook already has a table named '$table_name'";
-
-  # register this table
   push @{$self->{tables}}, $table_name;
   my $table_id = $self->n_tables;
 
@@ -301,9 +357,8 @@ sub add_table {
 
 
 sub add_defined_name {
-  my ($self, $name, $formula, $comment) = @_;
+  my ($self, $name, $formula, $comment) = &$sig_for_add_defined_name;
 
-  $name && $formula                        or croak 'add_defined_name($name, $formula): empty argument'; 
   not exists $self->{defined_names}{$name} or croak "add_defined_name(): name '$name' already in use";
   $self->{defined_names}{$name} = [$formula, $comment];
 }
@@ -323,7 +378,7 @@ sub worksheet_rels {
 #======================================================================
 
 sub save_as {
-  my ($self, $target) = @_;
+  my ($self, $target) = &$sig_for_save_as;
 
   # assemble all parts within the zip, except sheets and tables that were already added previously
   $self->add_string_to_zip($self->content_types,  "[Content_Types].xml"       );

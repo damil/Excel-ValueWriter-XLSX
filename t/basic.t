@@ -16,7 +16,8 @@ $writer->add_sheet(s1 => à_table => [[qw/foo bar barbar gig/],
                                      [3, undef, 0, 4],
                                      [qw(01.01.2022 19.12.1999 2022-3-4 12/30/1998)],
                                      [qw(01.01.1900 28.02.1900 01.03.1900)],
-                                     [qw/bar foo/]]);
+                                     [qw/bar foo/]],
+                   {cols => [60, 10, 40, 10]});
 
 # sheet without table
 $writer->add_sheet(table_oubliée => (undef) => [[qw/aa bb cc dd/],
