@@ -740,7 +740,8 @@ A compiled regular expression for detecting data cells that contain dates.
 The default implementation recognizes dates in C<dd.mm.yyyy>, C<yyyy-mm-dd>
 and C<mm/dd/yyyy> formats. User-supplied regular expressions should use
 named captures so that the day, month and year values can be found respectively
-in C<< $+{d} >>, C<< $+{m} >> and C<< $+{y} >>.
+in C<< $+{d} >>, C<< $+{m} >> and C<< $+{y} >>. If this parameter receives C<undef>,
+no date handling will be performed.
 
 =item bool_regex
 
@@ -750,6 +751,8 @@ User-supplied regular expressions should put the word corresponding to 'TRUE' wi
 parenthesis so that the content is captured in C<$1>. Here is an example for french :
 
   $writer = Excel::ValueWriter::XLSX->new(bool_regex => qr[^(?:(VRAI)|FAUX)$]);
+
+If this parameter receives C<undef>, no bool handling will be performed.
 
 
 =item compression_level
@@ -763,7 +766,7 @@ L<Archive::Zip>, which amounts to 6.
 
 =head2 add_sheet
 
-  $writer->add_sheet($sheet_name, $table_name, [$headers,] $rows_maker);
+  $writer->add_sheet($sheet_name, $table_name[, $headers], $rows_maker[, \%options]);
 
 Adds a new worksheet into the workbook.
 
@@ -826,6 +829,33 @@ an executed L<DBI> statement handle
 a L<DBIx::DataModel::Statement> object (version 3.0 or greater)
 
 =back
+
+=item *
+
+C<< \%options >> is an optional reference to a hash of additional options.
+Currently the only option is C<cols>, which points to an arrayref of column specifications.
+The arrayref may contain :
+
+=over
+
+=item *
+
+a list of numbers specifying the width of successive columns, like for example :
+
+  $writer->add_sheet(S_sales => sales => [qw/date product_id descr price/], $rows, {cols => [12, 8, 20, 8]);
+
+Column widths in Excel are expressed in "character units", i.e. a requested width of 8 should
+be just wide enough to display the string '00000000' (8 zero characters displayed with the normal font).
+
+=item *
+
+a list of hashrefs specifying column attributes. The C<width> attribute corresponds to column widths,
+as explained above. The C<style> attribute is a numeric index into the list of styles defined within
+the workbook -- except that currently this module has no support for defining styles, so this
+addition has no practical use at the moment.
+
+=back
+
 
 =back
 
