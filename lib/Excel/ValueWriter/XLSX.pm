@@ -13,7 +13,7 @@ use Encode                qw/encode_utf8/;
 use Data::Domain 1.16     qw/:all/;
 
 
-our $VERSION = '1.07';
+our $VERSION = '1.08';
 
 #======================================================================
 # GLOBALS
@@ -851,7 +851,7 @@ be just wide enough to display the string '00000000' (8 zero characters displaye
 
 a list of hashrefs specifying column attributes. The C<width> attribute corresponds to column widths,
 as explained above. The C<style> attribute is a numeric index into the list of styles defined within
-the workbook -- except that currently this module has no support for defining styles, so this
+the workbook -- except that currently this module only supports one single style for dates, so this
 addition has no practical use at the moment.
 
 =back

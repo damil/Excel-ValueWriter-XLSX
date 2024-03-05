@@ -1,5 +1,10 @@
 Revision history for Excel-ValueWriter-XLSX
 
+1.08     05.03.2024
+  - accept a new option to add_sheet() for specifying column widths
+  - validate params using Data::Domain instead of Params::Validate
+  - internal refactorings
+
 1.07     31.05.2023
   - make sure that Excel tables have at least one data row
 
