@@ -11,9 +11,9 @@ use Date::Calc            qw/Delta_Days/;
 use Carp                  qw/croak/;
 use Encode                qw/encode_utf8/;
 use Data::Domain 1.16     qw/:all/;
+use Try::Tiny;
 
-
-our $VERSION = '1.08';
+our $VERSION = '1.09';
 
 #======================================================================
 # GLOBALS
@@ -32,14 +32,14 @@ my $entity_regex = do {my $chars = join "", keys %entity; qr/[$chars]/};
 # SIGNATURES FOR CONTROLLING ARGS TO PUBLIC METHODS
 #======================================================================
 
-my $sig_for_new = Struict(
+my $sig_for_new = Struict( # Struict = strict Struct .. not a typo!
 
   # date_regex : for identifying dates in data cells. Should capture into $+{d}, $+{m} and $+{y}.
   date_regex        => Regexp(-if_absent =>
                          qr[^(?: (?<d>\d\d?)    \. (?<m>\d\d?) \. (?<y>\d\d\d\d)  # dd.mm.yyyy
                                | (?<y>\d\d\d\d) -  (?<m>\d\d?) -  (?<d>\d\d?)     # yyyy-mm-dd
                                | (?<m>\d\d?)    /  (?<d>\d\d?) /  (?<y>\d\d\d\d)) # mm/dd/yyyy
-                             $]),
+                             $]x),
 
   # bool_regex : for identifying booleans in data cells. If true, should capture into $1
   bool_regex        => Regexp(-if_absent => qr[^(?:(TRUE)|FALSE)$]),
@@ -124,7 +124,6 @@ sub add_sheet {
   none {$sheet_name eq $_} @{$self->{sheets}}
     or croak "this workbook already has a sheet named '$sheet_name'";
   push @{$self->{sheets}}, $sheet_name;
-
 
   # iterator for generating rows
   my $row_iterator = $self->_build_row_iterator($rows_maker, \$headers);
@@ -226,16 +225,18 @@ sub _build_rows {
       # get the value; if the cell is empty, no need to write it into the XML
       my $val = $row->[$col];
       defined $val and length $val or next COLUMN;
+      my $n_days; # in case we need to parse a date
 
       # choose XML attributes and inner value
       # NOTE : for perl, looks_like_number( "INFINITY") is TRUE! Hence the test $val !~ /^\pL/
-      (                                           my $tag,  my $attrs,            $val)
-      #                                              ====   =========             ====
-        = looks_like_number($val) && $val !~ /^\pL/ ? (v => ""                  , $val                           )
-        : $date_regex && $val =~ $date_regex        ? (v => qq{ s="$DATE_STYLE"}, n_days($+{y}, $+{m}, $+{d})    )
-        : $bool_regex && $val =~ $bool_regex        ? (v => qq{ t="b"}          , $1 ? 1 : 0                     )
-        : $val =~ /^=/                              ? (f => "",                   escape_formula($val)           )
-        :                                             (v => qq{ t="s"}          , $self->_add_shared_string($val));
+      (                                              my $tag,  my $attrs,            $val)
+      #                                                 ====   =========             ====
+        = looks_like_number($val) && $val !~ /^\pL/    ? (v => ""                  , $val                           )
+        : $date_regex && $val =~ $date_regex
+                      && is_valid_date(\%+, \$n_days)  ? (v => qq{ s="$DATE_STYLE"}, $n_days                        )
+        : $bool_regex && $val =~ $bool_regex           ? (v => qq{ t="b"}          , $1 ? 1 : 0                     )
+        : $val =~ /^=/                                 ? (f => "",                   escape_formula($val)           )
+        :                                                (v => qq{ t="s"}          , $self->_add_shared_string($val));
 
       # add the new XML cell
       my $cell = qq{<c r="$col_letter$row_num"$attrs><$tag>$val</$tag></c>};
@@ -649,15 +650,24 @@ sub escape_formula {
 }
 
 
-sub n_days {
-  my ($y, $m, $d) = @_;
+sub is_valid_date {
+  my ($named_captures, $n_days_ref) = @_;
+  my ($y, $m, $d) = @{$named_captures}{qw/y m d/};
 
-  # convert the given date into a number of days since 1st January 1900
-  my $n_days = Delta_Days(1900, 1, 1, $y, $m, $d) + 1;
-  my $is_after_february_1900 = $n_days > 59;
-  $n_days += 1 if $is_after_february_1900; # because Excel wrongly treats 1900 as a leap year
+  # years before 1900 can't be handled by Excel
+  return undef if $y < 1900;
 
-  return $n_days;
+  # convert the given date into a number of days since 1st January 1900.
+  my $return_status = try   {$$n_days_ref = Delta_Days(1900, 1, 1, $y, $m, $d) + 1;
+                             my $is_after_february_1900 = $$n_days_ref > 59;
+                             $$n_days_ref += 1 if $is_after_february_1900; # because Excel wrongly treats 1900 as a leap year
+                             1; # success
+                            };
+                             # no catch .. undef if failure (invalid date)
+ 
+  return $return_status;
+
+  # NOTE : invalid dates will be inserted as Excel strings
 }
 
 
@@ -861,8 +871,10 @@ addition has no practical use at the moment.
 
 Cells within a row must contain scalar values. Values that look like numbers are treated
 as numbers. String values that match the C<date_regex> are converted into numbers and
-displayed through a date format. String values that start with an initial '=' are treated
-as formulas; but like in Excel, if you want regular string that starts with a '=', put a single
+displayed through a date format, but only if the date is valid and is above 1900 January 1st --
+otherwise it is treated as a string, like in Excel.
+String values that start with an initial '=' are treated
+as formulas; but like in Excel, if you want a plain string that starts with a '=', put a single
 quote just before the '=' -- that single quote will be removed from the string.
 Everything else is treated as a string. Strings are shared at the workbook level
 (hence a string that appears several times in the input data will be stored

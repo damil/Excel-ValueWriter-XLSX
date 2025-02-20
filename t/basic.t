@@ -16,6 +16,7 @@ $writer->add_sheet(s1 => à_table => [[qw/foo bar barbar gig/],
                                      [3, undef, 0, 4],
                                      [qw(01.01.2022 19.12.1999 2022-3-4 12/30/1998)],
                                      [qw(01.01.1900 28.02.1900 01.03.1900)],
+                                     [qw(02.03.1824 32.01.2021)], # invalid dates
                                      [qw/bar foo/]],
                    {cols => [60, 10, 40, 10]});
 
@@ -74,6 +75,9 @@ like $strings, qr[<si><t>\Q=[foo]+[bar]&amp;[bar]\E</t></si>],   'escaped formul
 like $strings, qr[<si><t>INFINITY</t></si>],                     'INFINITY treated as a string';
 like $strings, qr[<si><t>ctrl_x0001__x0002__x0003_</t></si>],    'control chars';
 like $strings, qr[<si><t xml:space="preserve"> space </t></si>], 'preserve space';
+like $strings, qr[<si><t>02.03.1824</t></si>],                   'old date treated as string';
+like $strings, qr[<si><t>32.01.2021</t></si>],                   'invalid date treated as string';
+unlike $strings, qr[<si><t>01.01.2022</t></si>],                 'valid date not treated as string';
 
 my $sheet7 = $zip->contents('xl/worksheets/sheet7.xml');
 like $sheet7, qr[<row r="2"], 'sheet 7 has an empty data row';
